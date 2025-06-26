@@ -232,7 +232,61 @@ class Save extends Action
                 $productData[$header] = $row[$index] ?? null;
             }
         }
+
+        // SKU validation: must be present and alphanumeric only
+        if (empty($productData['sku'])) {
+            throw new \InvalidArgumentException((string)__('SKU is mandatory in the CSV file.'));
+        }
+        if (!preg_match('/^[a-zA-Z0-9]+$/', $productData['sku'])) {
+            throw new \InvalidArgumentException((string)__('SKU "%1" is invalid. Only alphanumeric characters are allowed.', $productData['sku']));
+        }
+
+        // Convert type_of_contract label to option ID
+        if (!empty($productData['type_of_contract'])) {
+            $optionId = $this->getAttributeOptionId('type_of_contract', $productData['type_of_contract']);
+            if ($optionId === null) {
+                throw new \InvalidArgumentException((string)__('Invalid value for type_of_contract: "%1"', $productData['type_of_contract']));
+            }
+            $productData['type_of_contract'] = $optionId;
+        }
+
+        // Validate parking_available as boolean (accepts 0, 1, true, false, yes, no)
+        if (isset($productData['parking_available'])) {
+            $val = strtolower(trim((string)$productData['parking_available']));
+            if (in_array($val, ['1', 'true', 'yes'], true)) {
+                $productData['parking_available'] = 1;
+            } elseif (in_array($val, ['0', 'false', 'no'], true)) {
+                $productData['parking_available'] = 0;
+            } else {
+                throw new \InvalidArgumentException((string)__('Invalid value for parking_available: "%1". Allowed: 1, 0, true, false, yes, no.', $productData['parking_available']));
+            }
+        }
+
         return $productData;
+    }
+
+    /**
+     * Retrieves the option ID for a given attribute code and label.
+     *
+     * @param string $attributeCode The code of the attribute to search for.
+     * @param string $label The label of the attribute option to find.
+     * @return int|null The ID of the attribute option if found, or null if not found.
+     */
+    protected function getAttributeOptionId(string $attributeCode, string $label): ?int
+    {
+        /** @var \Magento\Eav\Model\Config $eavConfig */
+        $eavConfig = \Magento\Framework\App\ObjectManager::getInstance()->get(\Magento\Eav\Model\Config::class);
+        try {
+            $attribute = $eavConfig->getAttribute('catalog_product', $attributeCode);
+            foreach ($attribute->getSource()->getAllOptions(false) as $option) {
+                if (strcasecmp(trim($option['label']), trim($label)) === 0) {
+                    return (int)$option['value'];
+                }
+            }
+        } catch (\Exception $e) {
+            $this->logger->error("Error fetching option ID for $attributeCode: " . $e->getMessage());
+        }
+        return null;
     }
 
     /**
