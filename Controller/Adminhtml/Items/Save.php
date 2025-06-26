@@ -228,8 +228,13 @@ class Save extends Action
     {
         $productData = [];
         foreach ($headers as $index => $header) {
-            if (in_array($header, self::ALLOWED_ATTRIBUTES, true)) {
-                $productData[$header] = $row[$index] ?? null;
+            // Only import attribute if value is present and not empty
+            if (
+                in_array($header, self::ALLOWED_ATTRIBUTES, true)
+                && isset($row[$index])
+                && $row[$index] !== ''
+            ) {
+                $productData[$header] = $row[$index];
             }
         }
 
