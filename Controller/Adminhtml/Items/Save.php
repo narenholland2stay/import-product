@@ -227,6 +227,8 @@ class Save extends Action
     protected function mapCsvToProductData(array $headers, array $row): array
     {
         $productData = [];
+
+        $alphanumericAttributes = ['name', 'parking_id', 'parking_code'];
         foreach ($headers as $index => $header) {
             // Only import attribute if value is present and not empty
             if (
@@ -234,6 +236,13 @@ class Save extends Action
                 && isset($row[$index])
                 && $row[$index] !== ''
             ) {
+                $value = trim($row[$index]);
+                // Validate parking_id: alphanumeric only, no spaces or special characters
+                if (in_array($header, $alphanumericAttributes, true) && !preg_match('/^[a-zA-Z0-9]+$/', $row[$index])) {
+                    throw new \InvalidArgumentException(
+                        (string)__("Invalid value for %1: \"%2\". Only alphanumeric characters (no spaces or special characters) are allowed.", $header, $row[$index])
+                    );
+                }
                 $productData[$header] = $row[$index];
             }
         }
@@ -246,24 +255,36 @@ class Save extends Action
             throw new \InvalidArgumentException((string)__('SKU "%1" is invalid. Only alphanumeric characters are allowed.', $productData['sku']));
         }
 
-        // Convert type_of_contract label to option ID
-        if (!empty($productData['type_of_contract'])) {
-            $optionId = $this->getAttributeOptionId('type_of_contract', $productData['type_of_contract']);
-            if ($optionId === null) {
-                throw new \InvalidArgumentException((string)__('Invalid value for type_of_contract: "%1"', $productData['type_of_contract']));
+        // Convert type_of_contract,parking_status label to option ID
+        $selectAttributes = ['type_of_contract', 'parking_status'];
+
+        foreach ($selectAttributes as $selectAttr) {
+            if (!empty($productData[$selectAttr])) {
+                $optionId = $this->getAttributeOptionId($selectAttr, $productData[$selectAttr]);
+                if ($optionId === null) {
+                    throw new \InvalidArgumentException((string)__('Invalid value for %1: "%2"', $selectAttr, $productData[$selectAttr]));
+                }
+                $productData[$selectAttr] = $optionId;
             }
-            $productData['type_of_contract'] = $optionId;
         }
 
         // Validate parking_available as boolean (accepts 0, 1, true, false, yes, no)
-        if (isset($productData['parking_available'])) {
-            $val = strtolower(trim((string)$productData['parking_available']));
-            if (in_array($val, ['1', 'true', 'yes'], true)) {
-                $productData['parking_available'] = 1;
-            } elseif (in_array($val, ['0', 'false', 'no'], true)) {
-                $productData['parking_available'] = 0;
-            } else {
-                throw new \InvalidArgumentException((string)__('Invalid value for parking_available: "%1". Allowed: 1, 0, true, false, yes, no.', $productData['parking_available']));
+        $booleanAttributes = ['parking_available', 'storage_available'];
+        $allowedTrue = ['1', 'true', 'yes'];
+        $allowedFalse = ['0', 'false', 'no'];
+
+        foreach ($booleanAttributes as $boolAttr) {
+            if (isset($productData[$boolAttr])) {
+                $val = strtolower(trim((string)$productData[$boolAttr]));
+                if (in_array($val, $allowedTrue, true)) {
+                    $productData[$boolAttr] = 1;
+                } elseif (in_array($val, $allowedFalse, true)) {
+                    $productData[$boolAttr] = 0;
+                } else {
+                    throw new \InvalidArgumentException(
+                        (string)__("Invalid value for %1: \"%2\". Allowed: 1, 0, true, false, yes, no.", $boolAttr, $productData[$boolAttr])
+                    );
+                }
             }
         }
 
