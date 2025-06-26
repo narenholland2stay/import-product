@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../Backend/etc/menu.xsd">
+    <menu>
+        <!-- Core menu item for the "Importproduct" module -->
+        <add 
+            id="code2stay_importproduct::core" 
+            title="Importproduct" 
+            module="Code2stay_Importproduct" 
+            sortOrder="90" 
+            resource="Code2stay_Importproduct::sample" 
+        />
+
+        <!-- Submenu item for "Items" under "Importproduct" -->
+        <add 
+            id="code2stay_importproduct::test" 
+            title="Import Product" 
+            module="Code2stay_Importproduct" 
+            sortOrder="10" 
+            parent="code2stay_importproduct::core" 
+            action="code2stay_importproduct/items/new" 
+            resource="Code2stay_Importproduct::items" 
+        />
+    </menu>
+</config>

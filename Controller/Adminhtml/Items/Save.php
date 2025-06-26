@@ -1,0 +1,336 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Code2stay\Importproduct\Controller\Adminhtml\Items;
+
+use Magento\Backend\App\Action;
+use Magento\Backend\App\Action\Context;
+use Psr\Log\LoggerInterface;
+use Magento\Backend\Model\Session;
+use Magento\Framework\File\Csv;
+use Magento\Framework\App\Filesystem\DirectoryList;
+use Magento\Framework\File\UploaderFactory;
+use Magento\Framework\Filesystem\Driver\File;
+use Code2stay\Importproduct\Model\ImportproductFactory;
+use Magento\Catalog\Model\ProductFactory;
+use Magento\Catalog\Api\ProductRepositoryInterface;
+use Magento\Store\Model\StoreManagerInterface;
+use Magento\Catalog\Model\ResourceModel\Product as ProductResourceModel;
+use Magento\Framework\Filesystem;
+use Magento\CatalogInventory\Api\StockRegistryInterface;
+use Magento\Catalog\Model\Product;
+use Magento\Eav\Api\AttributeSetRepositoryInterface;
+
+/**
+ * Controller for importing products via CSV in Magento 2 Admin.
+ *
+ * This controller handles the upload and processing of a CSV file containing product data.
+ * Only attributes defined in ALLOWED_ATTRIBUTES are imported or updated.
+ * The controller ensures products are created or updated according to business rules,
+ * and provides feedback via Magento's message manager.
+ *
+ * PHP version 8.2
+ * Magento version 2.4.8-p1
+ *
+ * @category   Code2stay
+ * @package    Code2stay_Importproduct
+ * @author     narendra@Holland2stay.com
+ */
+class Save extends Action
+{
+    /**
+     * List of allowed product attributes for import/update (case-insensitive).
+     */
+    public const ALLOWED_ATTRIBUTES = [
+        'sku',
+        'name',
+        'type_of_contract',
+        'parking_available',
+        'parking_id',
+        'parking_code',
+        'parking_status',
+        'storage_available',
+        'storage_id',
+        'storage_code',
+        'storage_status',
+        'start_unit_date',
+        'energy_link',
+        'energy_label',
+        'energy_index',
+        'energy_start',
+        'energy_end',
+        'publishing_way',
+        'reserved_comment',
+        'contract_template',
+        'utilities_in_contract',
+        'contract_custom_text',
+        'price_analysis_text',
+        'supplies_website',
+        'service_costs_website',
+        'description',
+        'book_now_text',
+        'offer_text',
+        'offer_text_two',
+        'location',
+        'income_requirements',
+        'short_description',
+        'additional_attributes'
+    ];
+
+    protected ProductRepositoryInterface $productRepository;
+    protected StoreManagerInterface $storeManager;
+    protected UploaderFactory $uploaderFactory;
+    protected Filesystem $filesystem;
+    protected DirectoryList $directoryList;
+    protected File $file;
+    protected Csv $csv;
+    protected Session $session;
+    protected ImportproductFactory $importproductFactory;
+    protected ProductFactory $productFactory;
+    protected ProductResourceModel $productResourceModel;
+    protected StockRegistryInterface $stockRegistry;
+    protected LoggerInterface $logger;
+    protected AttributeSetRepositoryInterface $attributeSetRepository;
+
+    /**
+     * Constructor for dependency injection.
+     */
+    public function __construct(
+        Context $context,
+        StoreManagerInterface $storeManager,
+        LoggerInterface $logger,
+        ProductRepositoryInterface $productRepository,
+        Filesystem $filesystem,
+        DirectoryList $directoryList,
+        UploaderFactory $uploaderFactory,
+        StockRegistryInterface $stockRegistry,
+        File $file,
+        Csv $csv,
+        Session $session,
+        ImportproductFactory $importproductFactory,
+        ProductFactory $productFactory,
+        ProductResourceModel $productResourceModel,
+        AttributeSetRepositoryInterface $attributeSetRepository
+    ) {
+        parent::__construct($context);
+        $this->storeManager = $storeManager;
+        $this->productRepository = $productRepository;
+        $this->filesystem = $filesystem;
+        $this->directoryList = $directoryList;
+        $this->uploaderFactory = $uploaderFactory;
+        $this->logger = $logger;
+        $this->file = $file;
+        $this->csv = $csv;
+        $this->stockRegistry = $stockRegistry;
+        $this->session = $session;
+        $this->importproductFactory = $importproductFactory;
+        $this->productFactory = $productFactory;
+        $this->productResourceModel = $productResourceModel;
+        $this->attributeSetRepository = $attributeSetRepository;
+    }
+
+    // Add this helper method to get the default attribute set ID:
+    protected function getDefaultAttributeSetId(): int
+    {
+        $productEntityType = Product::ENTITY;
+        $attributeSetId = $this->productFactory->create()->getResource()->getEntityType()->getDefaultAttributeSetId();
+        return (int)$attributeSetId;
+    }
+
+    /**
+     * Main controller action for handling the CSV import.
+     *
+     * @return \Magento\Framework\Controller\Result\Redirect
+     */
+    public function execute()
+    {
+        if ($this->getRequest()->getPostValue()) {
+            try {
+                $fileData = $this->getRequest()->getFiles('csv_file');
+                if (isset($fileData['name']) && $fileData['name'] !== '') {
+                    try {
+                        $mediaDirectory = $this->filesystem->getDirectoryRead(DirectoryList::MEDIA);
+                        $destinationPath = $mediaDirectory->getAbsolutePath('code2stay/importproduct/');
+
+                        $uploader = $this->uploaderFactory->create(['fileId' => 'csv_file']);
+                        $uploader->setAllowedExtensions(['csv']);
+                        $uploader->setAllowRenameFiles(true);
+                        $uploader->setFilesDispersion(false);
+
+                        $result = $uploader->save($destinationPath);
+                        if ($result) {
+                            $csvPath = $destinationPath . $result['file'];
+                            $csvData = $this->readCsvFile($csvPath);
+                            if ($csvData) {
+                                $headers = array_map(
+                                    static fn($h) => strtolower(trim($h)),
+                                    array_shift($csvData)
+                                );
+                                foreach ($csvData as $row) {
+                                    $productData = $this->mapCsvToProductData($headers, $row);
+                                    $product = $this->productFactory->create();
+                                    $existingProduct = $product->getCollection()
+                                        ->addFieldToFilter('sku', $productData['sku'] ?? '')
+                                        ->getFirstItem();
+
+                                    if ($existingProduct->getId()) {
+                                        $this->updateProduct($existingProduct, $productData);
+                                    }
+                                }
+                            }
+                        } else {
+                            $this->messageManager->addError(__('Error uploading CSV file.'));
+                        }
+                    } catch (\Exception $e) {
+                        $this->messageManager->addError(__('Error uploading CSV file: %1', $e->getMessage()));
+                        return $this->_redirect('code2stay_importproduct/*/new');
+                    }
+                }
+                $this->messageManager->addSuccess(__('CSV processed successfully.'));
+                return $this->_redirect('code2stay_importproduct/*/new');
+            } catch (\Exception $e) {
+                $this->messageManager->addError(__('Something went wrong while saving the item data.'));
+                return $this->_redirect('code2stay_importproduct/*/new');
+            }
+        }
+        return $this->_redirect('code2stay_importproduct/*/new');
+    }
+
+    /**
+     * Reads a CSV file and returns its data as an array.
+     *
+     * @param string $filePath
+     * @return array
+     */
+    protected function readCsvFile(string $filePath): array
+    {
+        $data = [];
+        try {
+            $csvData = $this->csv->getData($filePath);
+            foreach ($csvData as $row) {
+                $data[] = $row;
+            }
+        } catch (\Exception $e) {
+            $this->messageManager->addError(__('Error reading CSV file: %1', $e->getMessage()));
+        }
+        return $data;
+    }
+
+    /**
+     * Maps CSV row data to allowed product attributes.
+     *
+     * @param array $headers
+     * @param array $row
+     * @return array
+     */
+    protected function mapCsvToProductData(array $headers, array $row): array
+    {
+        $productData = [];
+        foreach ($headers as $index => $header) {
+            if (in_array($header, self::ALLOWED_ATTRIBUTES, true)) {
+                $productData[$header] = $row[$index] ?? null;
+            }
+        }
+        return $productData;
+    }
+
+    /**
+     * Generates a unique URL key for a product based on its name.
+     *
+     * @param string $name
+     * @return string
+     */
+    protected function generateUniqueUrlKey(string $name): string
+    {
+        $urlKey = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '-', $name), '-'));
+        $productCollection = $this->productFactory->create()->getCollection();
+        $productCollection->addFieldToFilter('url_key', $urlKey);
+        if ($productCollection->getSize() > 0) {
+            $urlKey = $this->generateRandomUrlKey();
+        }
+        return $urlKey;
+    }
+
+    /**
+     * Generates a random string for use as a URL key.
+     *
+     * @return string
+     */
+    protected function generateRandomUrlKey(): string
+    {
+        return bin2hex(random_bytes(8));
+    }
+
+
+    /**
+     * Updates the given product with the provided product data.
+     *
+     * @param \Magento\Catalog\Model\Product $product The product instance to update.
+     * @param array $productData An associative array of product data to apply.
+     *
+     * @return void
+     */
+    protected function updateProduct($product, array $productData): void
+    {
+        try {
+            foreach (self::ALLOWED_ATTRIBUTES as $attribute) {
+                if (isset($productData[$attribute])) {
+                    $product->setData($attribute, $productData[$attribute]);
+                }
+            }
+            $product->setAttributeSetId($this->getDefaultAttributeSetId());
+            $product->setTypeId('simple');
+            $product->setStatus(1);
+            $product->setVisibility(\Magento\Catalog\Model\Product\Visibility::VISIBILITY_BOTH);
+
+            $validWebsiteIds = [];
+
+            // Only assign valid website IDs
+            foreach ($this->storeManager->getWebsites() as $website) {
+                $stores = $website->getStores();
+                $hasValidStore = false;
+                foreach ($stores as $store) {
+                    // Exclude admin store (store_id = 0) and check if store is active
+                    if ($store->getId() != 0 && $store->getIsActive()) {
+                        $hasValidStore = true;
+                        break;
+                    }
+                }
+                if ($hasValidStore) {
+                    $validWebsiteIds[] = $website->getId();
+                }
+            }
+            if (empty($validWebsiteIds)) {
+                $this->messageManager->addError(__('No valid websites available for product update.'));
+                return;
+            }
+            $product->setWebsiteIds($validWebsiteIds);
+
+            $product->setStockData([
+                'use_config_manage_stock' => 0,
+                'manage_stock' => 1,
+                'is_in_stock' => 1,
+                'qty' => 1,
+            ]);
+
+            if (!empty($productData['name'])) {
+                $urlKey = $this->generateUniqueUrlKey($productData['name']);
+                $product->setUrlKey($urlKey);
+            }
+            $this->productRepository->save($product);
+
+            $stockItem = $this->stockRegistry->getStockItemBySku($productData['sku'] ?? '');
+            if ($stockItem) {
+                $stockItem->setQty(1);
+                $stockItem->setIsInStock(true);
+                $this->stockRegistry->updateStockItemBySku($productData['sku'] ?? '', $stockItem);
+            }
+
+            $this->messageManager->addSuccess(__('Product updated successfully: %1', $productData['sku'] ?? ''));
+        } catch (\Exception $e) {
+            $this->logger->error("Error updating product with SKU: " . ($productData['sku'] ?? '') . " | Error: " . $e->getMessage());
+            $this->messageManager->addError(__('Error updating product with SKU %1: %2', $productData['sku'] ?? '', $e->getMessage()));
+        }
+    }
+}

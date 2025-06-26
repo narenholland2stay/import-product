@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schema xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="urn:magento:framework:Setup/Declaration/Schema/etc/schema.xsd">
+    <table name="code2stay_importproduct">
+        <!-- Entity ID Column -->
+        <column xsi:type="int" name="importproduct_id" unsigned="true" nullable="false" comment="Entity ID"/>
+
+        <!-- Product SKU Column (Non-Nullable) -->
+        <column xsi:type="varchar" name="product_sku" length="255" nullable="false" comment="Product SKU"/>
+
+        <!-- Product Name Column -->
+        <column xsi:type="varchar" name="product_name" length="255" nullable="true" comment="Product Name"/>
+
+        <!-- Product Link Column -->
+        <column xsi:type="varchar" name="product_link" length="255" nullable="true" comment="Product Link"/>
+
+        <!-- Action Status Column -->
+        <column xsi:type="varchar" name="action_status" length="255" nullable="true" comment="Action Status"/>
+
+        <!-- Timestamp Columns -->
+        <column xsi:type="timestamp" name="created_at" nullable="false" comment="Created At"/>
+        <column xsi:type="timestamp" name="updated_at" nullable="false" comment="Updated At"/>
+
+        <!-- Primary Key Constraint -->
+        <constraint xsi:type="primary" referenceId="PRIMARY">
+            <column name="importproduct_id"/>
+        </constraint>
+    </table>
+</schema>

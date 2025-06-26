@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Acl/etc/acl.xsd">
+    <acl>
+        <resources>
+            <!-- Admin root resource for Magento Backend -->
+            <resource id="Magento_Backend::admin">
+                
+                <!-- Code2stay Importproduct module root -->
+                <resource id="Code2stay_Importproduct::root" title="Code2stay Importproduct" sortOrder="10">
+                    
+                    <!-- Sample permission for Importproduct -->
+                    <resource id="Code2stay_Importproduct::sample" title="Importproduct Sample" sortOrder="10" />
+
+                    <!-- Items permission under Importproduct -->
+                    <resource id="Code2stay_Importproduct::items" title="Manage Items" sortOrder="20">
+                        
+                        <!-- Additional sub-permission for "View Items" -->
+                        <resource id="Code2stay_Importproduct::view_items" title="View Items" sortOrder="10" />
+                        
+                        <!-- Additional sub-permission for "Add Items" -->
+                        <resource id="Code2stay_Importproduct::add_items" title="Add Items" sortOrder="20" />
+                    </resource>
+                    
+                </resource>
+            </resource>
+        </resources>
+    </acl>
+</config>
