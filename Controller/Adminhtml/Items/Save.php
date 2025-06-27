@@ -74,8 +74,7 @@ class Save extends Action
         'offer_text_two',
         'location',
         'income_requirements',
-        'short_description',
-        'additional_attributes'
+        'short_description'
     ];
 
     protected ProductRepositoryInterface $productRepository;
@@ -145,6 +144,7 @@ class Save extends Action
      */
     public function execute()
     {
+        $updatedSkus = [];
         if ($this->getRequest()->getPostValue()) {
             try {
                 $fileData = $this->getRequest()->getFiles('csv_file');
@@ -167,15 +167,33 @@ class Save extends Action
                                     static fn($h) => strtolower(trim($h)),
                                     array_shift($csvData)
                                 );
-                                foreach ($csvData as $row) {
-                                    $productData = $this->mapCsvToProductData($headers, $row);
-                                    $product = $this->productFactory->create();
-                                    $existingProduct = $product->getCollection()
-                                        ->addFieldToFilter('sku', $productData['sku'] ?? '')
-                                        ->getFirstItem();
+                                foreach ($csvData as $rowIndex => $row) {
+                                    try {
+                                        $productData = $this->mapCsvToProductData($headers, $row, $rowIndex + 2);
+                                        $product = $this->productFactory->create();
+                                        $existingProduct = $product->getCollection()
+                                            ->addFieldToFilter('sku', $productData['sku'] ?? '')
+                                            ->getFirstItem();
 
-                                    if ($existingProduct->getId()) {
-                                        $this->updateProduct($existingProduct, $productData);
+                                        if ($existingProduct->getId()) {
+                                            // Save original data for rollback
+                                            $originalData[$productData['sku']] = $existingProduct->getData();
+                                            $this->updateProduct($existingProduct, $productData);
+                                            $updatedSkus[] = $productData['sku'];
+                                        }
+                                    } catch (\Exception $e) {
+                                        // Rollback all updated products
+                                        foreach ($updatedSkus as $sku) {
+                                            if (isset($originalData[$sku])) {
+                                                $product = $this->productFactory->create()->loadByAttribute('sku', $sku);
+                                                if ($product) {
+                                                    $product->addData($originalData[$sku]);
+                                                    $this->productRepository->save($product);
+                                                }
+                                            }
+                                        }
+                                        $this->messageManager->addError(__('Import failed at row %1: %2. All previous changes have been rolled back.', $rowIndex + 2, $e->getMessage()));
+                                        return $this->_redirect('code2stay_importproduct/*/new');
                                     }
                                 }
                             }
@@ -190,7 +208,17 @@ class Save extends Action
                 $this->messageManager->addSuccess(__('CSV processed successfully.'));
                 return $this->_redirect('code2stay_importproduct/*/new');
             } catch (\Exception $e) {
-                $this->messageManager->addError(__('Something went wrong while saving the item data.'));
+                // Rollback all updated products
+                foreach ($updatedSkus as $sku) {
+                    if (isset($originalData[$sku])) {
+                        $product = $this->productFactory->create()->loadByAttribute('sku', $sku);
+                        if ($product) {
+                            $product->addData($originalData[$sku]);
+                            $this->productRepository->save($product);
+                        }
+                    }
+                }
+                $this->messageManager->addError(__('Something went wrong while saving the item data. All changes have been rolled back.'));
                 return $this->_redirect('code2stay_importproduct/*/new');
             }
         }
@@ -224,11 +252,11 @@ class Save extends Action
      * @param array $row
      * @return array
      */
-    protected function mapCsvToProductData(array $headers, array $row): array
+    protected function mapCsvToProductData(array $headers, array $row, int $rowNumber = 0): array
     {
         $productData = [];
 
-        $alphanumericAttributes = ['name', 'parking_id', 'parking_code'];
+        $alphanumericAttributes = ['parking_id', 'parking_code', 'storage_id', 'storage_code'];
         foreach ($headers as $index => $header) {
             // Only import attribute if value is present and not empty
             if (
@@ -238,12 +266,12 @@ class Save extends Action
             ) {
                 $value = trim($row[$index]);
                 // Validate parking_id: alphanumeric only, no spaces or special characters
-                if (in_array($header, $alphanumericAttributes, true) && !preg_match('/^[a-zA-Z0-9]+$/', $row[$index])) {
+                if (in_array($header, $alphanumericAttributes, true) && !preg_match('/^[a-zA-Z0-9]+$/', $value)) {
                     throw new \InvalidArgumentException(
-                        (string)__("Invalid value for %1: \"%2\". Only alphanumeric characters (no spaces or special characters) are allowed.", $header, $row[$index])
+                        (string)__("Row %1, Column '%2': Invalid value \"%3\". Only alphanumeric characters (no spaces or special characters) are allowed.", $rowNumber, $header, $value)
                     );
                 }
-                $productData[$header] = $row[$index];
+                $productData[$header] = $value;
             }
         }
 
@@ -256,7 +284,7 @@ class Save extends Action
         }
 
         // Convert type_of_contract,parking_status label to option ID
-        $selectAttributes = ['type_of_contract', 'parking_status'];
+        $selectAttributes = ['type_of_contract', 'parking_status', 'storage_status', 'publishing_way'];
 
         foreach ($selectAttributes as $selectAttr) {
             if (!empty($productData[$selectAttr])) {
@@ -285,6 +313,29 @@ class Save extends Action
                         (string)__("Invalid value for %1: \"%2\". Allowed: 1, 0, true, false, yes, no.", $boolAttr, $productData[$boolAttr])
                     );
                 }
+            }
+        }
+
+        $dateAttributes = ['start_unit_date', 'energy_start', 'energy_end'];
+        foreach ($dateAttributes as $dateAttr) {
+            if (!empty($productData[$dateAttr])) {
+                $date = \DateTime::createFromFormat('Y-m-d', $productData[$dateAttr]);
+                if ($date) {
+                    // Set time to noon to avoid timezone issues
+                    $date->setTime(12, 0, 0);
+                } else {
+                    $date = \DateTime::createFromFormat('Y-m-d H:i:s', $productData[$dateAttr])
+                        ?: \DateTime::createFromFormat('d/m/y', $productData[$dateAttr]);
+                    if ($date && strlen($productData[$dateAttr]) === 8) { // d/m/y
+                        $date->setTime(12, 0, 0);
+                    }
+                }
+                if (!$date) {
+                    throw new \InvalidArgumentException(
+                        (string)__("Invalid value for %1: \"%2\". Expected format: Y-m-d, Y-m-d H:i:s, or d/m/y", $dateAttr, $productData[$dateAttr])
+                    );
+                }
+                $productData[$dateAttr] = $date->format('Y-m-d H:i:s');
             }
         }
 
